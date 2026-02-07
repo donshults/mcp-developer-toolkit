@@ -77,18 +77,43 @@ your-saas-project/
 
 ## Quick Start
 
+### Installation
+
 ```bash
-# Install toolkit
-cd /home/clawdbot/clawd/mcp-developer-toolkit
+# Clone and install
+git clone https://github.com/donshults/mcp-developer-toolkit.git
+cd mcp-developer-toolkit
 sudo ./install.sh
+```
 
-# Create your first MCP server
-mcp-dev create context-vault --repo https://github.com/donshults/ThisIsDonsBrain.git
+### Basic Usage
 
-# Start and test
+```bash
+# Create MCP server from standardized repo (auto-detects /mcp-server/)
+mcp-dev create my-server --repo https://github.com/user/project.git
+
+# Or for legacy/custom structure
+mcp-dev create my-server --repo URL --subfolder custom_folder
+
+# Manage your MCP servers
+mcp-dev start my-server       # Start the server
+mcp-dev list                  # Show all servers
+mcp-dev update my-server      # Git pull + restart  
+mcp-dev health my-server      # Test connectivity
+mcp-dev stop my-server        # Clean shutdown
+```
+
+### Real Example - Context Vault
+
+```bash
+# Context Vault uses legacy structure (mcp_server folder)
+mcp-dev create context-vault \
+  --repo https://github.com/donshults/ThisIsDonsBrain.git \
+  --subfolder mcp_server
+
+# Start and verify
 mcp-dev start context-vault
-mcp-dev health context-vault
-mcp-dev logs context-vault
+mcp-dev status               # Check if running
 ```
 
 ## Use Cases
@@ -152,4 +177,41 @@ MCP Developer Toolkit
 - `mcp-dev test-config <name>` - Validate configuration
 - `mcp-dev connect <name>` - Test MCP connectivity
 
-(Implementation coming next...)
+## Community & Support
+
+### Contributing
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+**Quick ways to help:**
+- ⭐ Star the repository 
+- 🐛 Report bugs and issues
+- 💡 Suggest features
+- 🔧 Submit pull requests
+- 📖 Improve documentation
+- 🧪 Test with your MCP servers
+
+### Getting Help
+- **Issues**: [GitHub Issues](https://github.com/donshults/mcp-developer-toolkit/issues) for bugs and feature requests
+- **Discussions**: Use GitHub Discussions for questions
+- **Standard Questions**: Use the "Repository Standard Question" issue template
+
+### Repository Standard Adoption
+Help establish `/mcp-server/` as the ecosystem standard:
+
+1. **Use the standard** in your MCP server repositories
+2. **Share feedback** on what works/doesn't work
+3. **Spread the word** to other MCP developers
+4. **Contribute examples** of well-structured MCP repositories
+
+## Roadmap
+
+- [ ] **Virtual Environment Support** - Full isolation per MCP server
+- [ ] **Health Check Enhancements** - Better connectivity testing
+- [ ] **Windows Support** - Cross-platform compatibility  
+- [ ] **VSCode Extension** - IDE integration for MCP development
+- [ ] **Web Dashboard** - GUI for managing MCP servers
+- [ ] **Package Distribution** - PyPI/npm packages for easier installation
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file for details.
