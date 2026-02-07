@@ -1,0 +1,404 @@
+#!/usr/bin/env python3
+"""
+MCP Developer Toolkit - Simple Version
+Works without virtual environments for testing
+"""
+
+import os
+import sys
+import json
+import subprocess
+import argparse
+import signal
+import time
+from pathlib import Path
+from typing import Dict, List, Optional
+
+class MCPManagerSimple:
+    def __init__(self, base_dir: str = None):
+        self.base_dir = Path(base_dir or os.path.expanduser("~/mcp-servers"))
+        self.registry_file = self.base_dir / "registry.json"
+        self.ensure_base_dir()
+        
+    def ensure_base_dir(self):
+        """Create base directory structure"""
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        if not self.registry_file.exists():
+            self.save_registry({})
+    
+    def load_registry(self) -> Dict:
+        """Load server registry"""
+        try:
+            with open(self.registry_file) as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+    
+    def save_registry(self, registry: Dict):
+        """Save server registry"""
+        with open(self.registry_file, 'w') as f:
+            json.dump(registry, f, indent=2)
+    
+    def create_server(self, name: str, repo: str, entry_point: str = "server.py", subfolder: str = "mcp-server") -> bool:
+        """Create new MCP server from repository (simple version)"""
+        registry = self.load_registry()
+        
+        if name in registry:
+            print(f"❌ Server '{name}' already exists")
+            return False
+        
+        server_dir = self.base_dir / name
+        temp_dir = self.base_dir / f"{name}_temp"
+        
+        print(f"🚀 Creating MCP server: {name}")
+        
+        try:
+            # Clone repository to temp directory
+            print(f"📥 Cloning repository...")
+            subprocess.run(["git", "clone", repo, str(temp_dir)], 
+                          check=True, capture_output=True)
+            
+            if subfolder and subfolder.strip():
+                # Extract just the subfolder contents
+                source_dir = temp_dir / subfolder
+                if not source_dir.exists():
+                    raise Exception(f"Subfolder '{subfolder}' not found in repository")
+                
+                print(f"📁 Extracting MCP server from {subfolder}/...")
+                server_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Copy subfolder contents to server directory
+                subprocess.run(["cp", "-r", f"{source_dir}/.", str(server_dir)], 
+                              check=True)
+                
+                # Copy git folder for updates
+                git_source = temp_dir / ".git"
+                git_dest = server_dir / ".git"
+                if git_source.exists():
+                    subprocess.run(["cp", "-r", str(git_source), str(git_dest)], 
+                                  check=True)
+                
+                # Clean up temp directory
+                subprocess.run(["rm", "-rf", str(temp_dir)], check=True)
+            else:
+                # Move entire repo
+                subprocess.run(["mv", str(temp_dir), str(server_dir)], check=True)
+            
+            # Check if requirements exist (but don't install in simple mode)
+            requirements_file = server_dir / "requirements.txt"
+            if requirements_file.exists():
+                print(f"📋 Found requirements.txt (install manually: pip install -r {requirements_file})")
+            
+            # Register server
+            registry[name] = {
+                "repo": repo,
+                "path": str(server_dir),
+                "entry_point": entry_point,
+                "subfolder": subfolder,
+                "created": time.time(),
+                "pid": None
+            }
+            
+            self.save_registry(registry)
+            print(f"✅ Server '{name}' created successfully")
+            print(f"📂 Location: {server_dir}")
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Failed to create server: {e}")
+            # Cleanup on failure
+            for cleanup_dir in [server_dir, temp_dir]:
+                if cleanup_dir.exists():
+                    subprocess.run(["rm", "-rf", str(cleanup_dir)], check=True)
+            return False
+        except Exception as e:
+            print(f"❌ Failed to create server: {e}")
+            # Cleanup on failure
+            for cleanup_dir in [server_dir, temp_dir]:
+                if cleanup_dir.exists():
+                    subprocess.run(["rm", "-rf", str(cleanup_dir)], check=True)
+            return False
+    
+    def start_server(self, name: str) -> bool:
+        """Start MCP server"""
+        registry = self.load_registry()
+        
+        if name not in registry:
+            print(f"❌ Server '{name}' not found")
+            return False
+        
+        server = registry[name]
+        
+        if server.get("pid") and self.is_process_running(server["pid"]):
+            print(f"⚠️ Server '{name}' is already running (PID: {server['pid']})")
+            return True
+        
+        server_dir = Path(server["path"])
+        entry_script = server_dir / server["entry_point"]
+        
+        if not entry_script.exists():
+            print(f"❌ Entry point not found: {entry_script}")
+            return False
+        
+        print(f"🚀 Starting server: {name}")
+        
+        try:
+            # Start process in background (using system Python)
+            process = subprocess.Popen(
+                [sys.executable, str(entry_script)],
+                cwd=str(server_dir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                preexec_fn=os.setsid
+            )
+            
+            # Update registry with PID
+            server["pid"] = process.pid
+            registry[name] = server
+            self.save_registry(registry)
+            
+            # Give it a moment to start
+            time.sleep(2)
+            
+            if self.is_process_running(process.pid):
+                print(f"✅ Server '{name}' started (PID: {process.pid})")
+                return True
+            else:
+                print(f"❌ Server '{name}' failed to start")
+                return False
+                
+        except Exception as e:
+            print(f"❌ Failed to start server: {e}")
+            return False
+    
+    def stop_server(self, name: str) -> bool:
+        """Stop MCP server"""
+        registry = self.load_registry()
+        
+        if name not in registry:
+            print(f"❌ Server '{name}' not found")
+            return False
+        
+        server = registry[name]
+        pid = server.get("pid")
+        
+        if not pid or not self.is_process_running(pid):
+            print(f"⚠️ Server '{name}' is not running")
+            server["pid"] = None
+            registry[name] = server
+            self.save_registry(registry)
+            return True
+        
+        print(f"🛑 Stopping server: {name}")
+        
+        try:
+            # Try graceful shutdown first
+            os.killpg(os.getpgid(pid), signal.SIGTERM)
+            
+            # Wait for graceful shutdown
+            for _ in range(10):
+                if not self.is_process_running(pid):
+                    break
+                time.sleep(0.5)
+            
+            # Force kill if still running
+            if self.is_process_running(pid):
+                os.killpg(os.getpgid(pid), signal.SIGKILL)
+                time.sleep(1)
+            
+            server["pid"] = None
+            registry[name] = server
+            self.save_registry(registry)
+            
+            print(f"✅ Server '{name}' stopped")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to stop server: {e}")
+            return False
+    
+    def restart_server(self, name: str) -> bool:
+        """Restart MCP server"""
+        print(f"🔄 Restarting server: {name}")
+        self.stop_server(name)
+        time.sleep(1)
+        return self.start_server(name)
+    
+    def update_server(self, name: str) -> bool:
+        """Update server from Git and restart"""
+        registry = self.load_registry()
+        
+        if name not in registry:
+            print(f"❌ Server '{name}' not found")
+            return False
+        
+        server = registry[name]
+        server_dir = Path(server["path"])
+        subfolder = server.get("subfolder")
+        
+        print(f"📥 Updating server: {name}")
+        
+        try:
+            if subfolder and subfolder.strip():
+                # For subfolder setups, we need to pull then extract again
+                temp_dir = server_dir.parent / f"{name}_update_temp"
+                
+                # Clone fresh copy
+                subprocess.run(["git", "clone", server["repo"], str(temp_dir)], 
+                              check=True, capture_output=True)
+                
+                source_dir = temp_dir / subfolder
+                if not source_dir.exists():
+                    raise Exception(f"Subfolder '{subfolder}' not found after update")
+                
+                print(f"📁 Extracting updated MCP server from {subfolder}/...")
+                
+                # Backup current files (except .git)
+                backup_dir = server_dir.parent / f"{name}_backup"
+                subprocess.run(["mkdir", "-p", str(backup_dir)], check=True)
+                subprocess.run(["cp", "-r", f"{server_dir}/.", str(backup_dir)], check=True)
+                
+                # Clear current directory (except .git)
+                for item in server_dir.iterdir():
+                    if item.name != ".git":
+                        subprocess.run(["rm", "-rf", str(item)], check=True)
+                
+                # Copy new files
+                subprocess.run(["cp", "-r", f"{source_dir}/.", str(server_dir)], check=True)
+                
+                # Update git folder
+                git_source = temp_dir / ".git"
+                git_dest = server_dir / ".git"
+                if git_source.exists() and git_dest.exists():
+                    subprocess.run(["rm", "-rf", str(git_dest)], check=True)
+                    subprocess.run(["cp", "-r", str(git_source), str(git_dest)], check=True)
+                
+                # Cleanup
+                subprocess.run(["rm", "-rf", str(temp_dir), str(backup_dir)], check=True)
+                
+            else:
+                # Normal git pull for full repo
+                result = subprocess.run(["git", "pull"], 
+                                      cwd=str(server_dir), 
+                                      capture_output=True, 
+                                      text=True)
+                
+                print(f"Git output: {result.stdout}")
+                
+                if "Already up to date" in result.stdout:
+                    print(f"✅ Server '{name}' is already up to date")
+                    return True
+            
+            # Restart if it was running
+            was_running = server.get("pid") and self.is_process_running(server["pid"])
+            if was_running:
+                print(f"🔄 Restarting server after update...")
+                self.restart_server(name)
+            
+            print(f"✅ Server '{name}' updated successfully")
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Failed to update server: {e}")
+            return False
+        except Exception as e:
+            print(f"❌ Failed to update server: {e}")
+            return False
+    
+    def list_servers(self):
+        """List all managed servers"""
+        registry = self.load_registry()
+        
+        if not registry:
+            print("📭 No MCP servers configured")
+            return
+        
+        print("\n📋 MCP Servers:")
+        print("-" * 80)
+        
+        for name, server in registry.items():
+            pid = server.get("pid")
+            status = "🟢 RUNNING" if pid and self.is_process_running(pid) else "⚫ STOPPED"
+            
+            print(f"{status} {name}")
+            print(f"    Path: {server['path']}")
+            print(f"    Repo: {server['repo']}")
+            if pid:
+                print(f"    PID:  {pid}")
+            print()
+    
+    @staticmethod
+    def is_process_running(pid: int) -> bool:
+        """Check if process is running"""
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+def main():
+    parser = argparse.ArgumentParser(description="MCP Developer Toolkit (Simple Version)")
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    
+    # Create server
+    create_parser = subparsers.add_parser("create", help="Create new MCP server")
+    create_parser.add_argument("name", help="Server name")
+    create_parser.add_argument("--repo", required=True, help="Git repository URL")
+    create_parser.add_argument("--entry-point", default="server.py", help="Entry point script")
+    create_parser.add_argument("--subfolder", default="mcp-server", help="Extract only this subfolder from the repo (default: mcp-server, use --subfolder '' for full repo)")
+    
+    # Server control
+    subparsers.add_parser("list", help="List all servers")
+    
+    start_parser = subparsers.add_parser("start", help="Start server")
+    start_parser.add_argument("name", help="Server name or 'all'")
+    
+    stop_parser = subparsers.add_parser("stop", help="Stop server")
+    stop_parser.add_argument("name", help="Server name or 'all'")
+    
+    restart_parser = subparsers.add_parser("restart", help="Restart server")
+    restart_parser.add_argument("name", help="Server name")
+    
+    update_parser = subparsers.add_parser("update", help="Update server")
+    update_parser.add_argument("name", help="Server name")
+    
+    subparsers.add_parser("status", help="Show status of all servers")
+    
+    args = parser.parse_args()
+    
+    if not args.command:
+        parser.print_help()
+        return
+    
+    manager = MCPManagerSimple()
+    
+    if args.command == "create":
+        manager.create_server(args.name, args.repo, args.entry_point, args.subfolder)
+    
+    elif args.command == "list" or args.command == "status":
+        manager.list_servers()
+    
+    elif args.command == "start":
+        if args.name == "all":
+            registry = manager.load_registry()
+            for name in registry:
+                manager.start_server(name)
+        else:
+            manager.start_server(args.name)
+    
+    elif args.command == "stop":
+        if args.name == "all":
+            registry = manager.load_registry()
+            for name in registry:
+                manager.stop_server(name)
+        else:
+            manager.stop_server(args.name)
+    
+    elif args.command == "restart":
+        manager.restart_server(args.name)
+    
+    elif args.command == "update":
+        manager.update_server(args.name)
+
+if __name__ == "__main__":
+    main()
