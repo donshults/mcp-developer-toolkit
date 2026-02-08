@@ -55,30 +55,46 @@ class MCPManager:
         print(f"🚀 Creating MCP server: {name}")
         
         try:
-            # Clone repository
-            print(f"📥 Cloning repository...")
-            temp_clone_dir = server_dir.parent / f"{name}-temp-clone"
-            subprocess.run(["git", "clone", repo, str(temp_clone_dir)], 
-                          check=True, capture_output=True)
-            
-            # Handle subfolder extraction
             if subfolder:
-                subfolder_path = temp_clone_dir / subfolder
+                # Use sparse checkout to only get the subfolder
+                print(f"📥 Cloning repository with sparse checkout for: {subfolder}")
+                server_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Initialize git repo
+                subprocess.run(["git", "init"], cwd=str(server_dir), check=True, capture_output=True)
+                subprocess.run(["git", "remote", "add", "origin", repo], cwd=str(server_dir), check=True, capture_output=True)
+                
+                # Enable sparse checkout
+                subprocess.run(["git", "config", "core.sparseCheckout", "true"], cwd=str(server_dir), check=True, capture_output=True)
+                
+                # Define sparse checkout pattern
+                sparse_checkout_file = server_dir / ".git" / "info" / "sparse-checkout"
+                with open(sparse_checkout_file, 'w') as f:
+                    f.write(f"{subfolder}/*\n")
+                
+                # Pull only the specified subfolder
+                subprocess.run(["git", "pull", "origin", "main"], cwd=str(server_dir), check=True, capture_output=True)
+                
+                # Check if subfolder exists
+                subfolder_path = server_dir / subfolder
                 if not subfolder_path.exists():
                     print(f"❌ Subfolder '{subfolder}' not found in repository")
-                    subprocess.run(["rm", "-rf", str(temp_clone_dir)], check=True)
+                    subprocess.run(["rm", "-rf", str(server_dir)], check=True)
                     return False
                 
-                print(f"📁 Extracting subfolder: {subfolder}")
-                # Move subfolder contents to server_dir
-                server_dir.mkdir(parents=True, exist_ok=True)
-                subprocess.run(["cp", "-r", f"{subfolder_path}/.", str(server_dir)], 
-                              check=True, capture_output=True)
-                # Clean up temp clone
-                subprocess.run(["rm", "-rf", str(temp_clone_dir)], check=True)
+                # Move subfolder contents up to root level
+                print(f"📁 Extracting subfolder contents...")
+                for item in subfolder_path.iterdir():
+                    item.rename(server_dir / item.name)
+                subfolder_path.rmdir()
+                
+                # Clean up git metadata since we only need the files
+                subprocess.run(["rm", "-rf", str(server_dir / ".git")], check=True)
+                
             else:
-                # Move entire clone to server_dir
-                subprocess.run(["mv", str(temp_clone_dir), str(server_dir)], 
+                # Clone entire repository normally
+                print(f"📥 Cloning repository...")
+                subprocess.run(["git", "clone", repo, str(server_dir)], 
                               check=True, capture_output=True)
             
             # Create virtual environment
@@ -117,10 +133,6 @@ class MCPManager:
             # Cleanup on failure
             if server_dir.exists():
                 subprocess.run(["rm", "-rf", str(server_dir)], check=True)
-            # Also cleanup temp clone if it exists
-            temp_clone_dir = server_dir.parent / f"{name}-temp-clone"
-            if temp_clone_dir.exists():
-                subprocess.run(["rm", "-rf", str(temp_clone_dir)], check=True)
             return False
     
     def start_server(self, name: str) -> bool:
