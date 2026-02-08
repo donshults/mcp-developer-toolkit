@@ -41,7 +41,7 @@ class MCPManager:
             json.dump(registry, f, indent=2)
     
     def create_server(self, name: str, repo: str, entry_point: str = "server.py", 
-                     port: int = None, health_path: str = "/health") -> bool:
+                     port: int = None, health_path: str = "/health", subfolder: str = None) -> bool:
         """Create new MCP server from repository"""
         registry = self.load_registry()
         
@@ -57,8 +57,29 @@ class MCPManager:
         try:
             # Clone repository
             print(f"📥 Cloning repository...")
-            subprocess.run(["git", "clone", repo, str(server_dir)], 
+            temp_clone_dir = server_dir.parent / f"{name}-temp-clone"
+            subprocess.run(["git", "clone", repo, str(temp_clone_dir)], 
                           check=True, capture_output=True)
+            
+            # Handle subfolder extraction
+            if subfolder:
+                subfolder_path = temp_clone_dir / subfolder
+                if not subfolder_path.exists():
+                    print(f"❌ Subfolder '{subfolder}' not found in repository")
+                    subprocess.run(["rm", "-rf", str(temp_clone_dir)], check=True)
+                    return False
+                
+                print(f"📁 Extracting subfolder: {subfolder}")
+                # Move subfolder contents to server_dir
+                server_dir.mkdir(parents=True, exist_ok=True)
+                subprocess.run(["cp", "-r", f"{subfolder_path}/.", str(server_dir)], 
+                              check=True, capture_output=True)
+                # Clean up temp clone
+                subprocess.run(["rm", "-rf", str(temp_clone_dir)], check=True)
+            else:
+                # Move entire clone to server_dir
+                subprocess.run(["mv", str(temp_clone_dir), str(server_dir)], 
+                              check=True, capture_output=True)
             
             # Create virtual environment
             print(f"🐍 Setting up Python environment...")
@@ -72,6 +93,8 @@ class MCPManager:
                 pip_path = venv_dir / "bin" / "pip"
                 subprocess.run([str(pip_path), "install", "-r", str(requirements_file)], 
                               check=True, capture_output=True)
+            else:
+                print(f"⚠️ No requirements.txt found in server directory")
             
             # Register server
             registry[name] = {
@@ -80,6 +103,7 @@ class MCPManager:
                 "entry_point": entry_point,
                 "port": port,
                 "health_path": health_path,
+                "subfolder": subfolder,
                 "created": time.time(),
                 "pid": None
             }
@@ -93,6 +117,10 @@ class MCPManager:
             # Cleanup on failure
             if server_dir.exists():
                 subprocess.run(["rm", "-rf", str(server_dir)], check=True)
+            # Also cleanup temp clone if it exists
+            temp_clone_dir = server_dir.parent / f"{name}-temp-clone"
+            if temp_clone_dir.exists():
+                subprocess.run(["rm", "-rf", str(temp_clone_dir)], check=True)
             return False
     
     def start_server(self, name: str) -> bool:
@@ -335,6 +363,7 @@ def main():
     create_parser.add_argument("name", help="Server name")
     create_parser.add_argument("--repo", required=True, help="Git repository URL")
     create_parser.add_argument("--entry-point", default="server.py", help="Entry point script")
+    create_parser.add_argument("--subfolder", help="Extract specific subfolder from repository")
     create_parser.add_argument("--port", type=int, help="Server port for health checks")
     create_parser.add_argument("--health-path", default="/health", help="Health check endpoint")
     
@@ -371,7 +400,7 @@ def main():
     manager = MCPManager()
     
     if args.command == "create":
-        manager.create_server(args.name, args.repo, args.entry_point, args.port, args.health_path)
+        manager.create_server(args.name, args.repo, args.entry_point, args.port, args.health_path, args.subfolder)
     
     elif args.command == "list" or args.command == "status":
         manager.list_servers()
